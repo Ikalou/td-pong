@@ -144,7 +144,6 @@ io.on('connection', function(socket) {
 
     // Listen for join-room
     socket.on('join-room', function (roomId) {
-        console.log(roomId);
         console.log('> join-room [' + socket.handshake.address + ']');
 
         const playerId = socket.__playerId;
