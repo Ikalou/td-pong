@@ -46,35 +46,53 @@ function getSocketForPlayer(playerId) {
     return socketsByPlayerId[playerId];
 }
 
+function cleanupForPlayerId(playerId) {
+    console.log('(!) cleanupForPlayerId: player "' + playerId + '"');
+
+    if (socketsByPlayerId[playerId]) {
+        delete socketsByPlayerId[playerId];
+    }
+    const room = roomsByPlayerId[playerId];
+    if (room) {
+        const playerNum = getPlayerNum(room, playerId);
+        if (playerNum !== null) { room.playerIds[playerNum - 1] = null; }
+
+        delete roomsByPlayerId[playerId];
+
+        const remainingPlayer = room.playerIds.filter(util.isString);
+        if (remainingPlayer.length) {
+            // Send event room-changed to all remaining players
+            remainingPlayer.map(getSocketForPlayer).forEach(sock => sock.emit('room-changed', room));
+        } else {
+            // No more player, reap the room
+            console.log('(!) cleanupForPlayerId: room "' + room.roomId + '" is empty. Cleaning up...');
+            delete rooms[room.roomId];
+        }
+    }
+}
+
 /*
 Server logic
  */
 io.on('connection', function(socket) {
+    console.log('> connect [' + socket.handshake.address + ']');
+
     // Listen for disconnect
     socket.on('disconnect', function () {
+        console.log('> disconnect [' + socket.handshake.address + ']');
         // Did the player hello the server before disconnecting?
-        if (typeof socket.__playerId === "undefined") {
-            return;
-        }
+        if (!socket.__playerId) { return; }
 
-        // Was the player inside a room?
-        const room = roomsByPlayerId[socket.__playerId];
-        if (typeof room === "undefined") {
-            return;
-        }
-
-        // Remove the player from the room
-        const playerNum = getPlayerNum(room, socket.__playerId);
-        room.playerIds[playerNum - 1] = null;
-
-        // Send event room-changed to all remaining players
-        room.playerIds.filter(util.isString).map(getSocketForPlayer).forEach(sock => sock.emit('room-changed', room));
-        });
+        // Cleanup any previous state for socket/player
+        cleanupForPlayerId(socket.__playerId);
     });
 
     // Listen for hello
     socket.on('hello', function () {
         console.log('> hello [' + socket.handshake.address + ']');
+
+        // Cleanup any previous state for socket/player
+        if (socket.__playerId) { cleanupForPlayerId(socket.__playerId); }
 
         // Get a new id for player
         const playerId = getUUID();
@@ -84,16 +102,18 @@ io.on('connection', function(socket) {
         socket.__playerId = playerId;
 
         // Send ok reply
-        console.log('< hello-ok(' + playerId + ') [' + socket.handshake.address + ']');
         socket.emit('hello-ok', playerId);
     });
 
     // Listen for create-room
-    socket.on('create-room', function (playerId) {
-        console.log('> create-room(' + playerId + ') [' + socket.handshake.address + ']');
+    socket.on('create-room', function () {
+        console.log('> create-room [' + socket.handshake.address + ']');
+
+        const playerId = socket.__playerId;
+        if (!playerId) { return; }
 
         // Make a new room
-        sweetName().then(function (roomId) {
+        sweetName().then(roomId => {
             const room = {
                 started: false,
                 roomId: roomId,
@@ -104,8 +124,6 @@ io.on('connection', function(socket) {
             roomsByPlayerId[playerId] = room;
 
             // Send ok reply
-            console.log('< create-room-ok(1, _) [' + socket.handshake.address + ']');
-            console.log(room);
             socket.emit('create-room-ok', {
                 playerNum: 1,
                 room: room
@@ -118,59 +136,83 @@ io.on('connection', function(socket) {
         console.log('> list-rooms [' + socket.handshake.address + ']');
 
         // Send ok reply
-        console.log('< list-rooms-ok(_) [' + socket.handshake.address + ']');
-        console.log(rooms);
-        socket.emit('list-rooms-ok', rooms);
+        // Only list rooms where the game has not started and there are less than 4 players
+        socket.emit('list-rooms-ok', Object.keys(rooms).map(roomKey => rooms[roomKey]).filter(room =>
+            !room.started && room.playerIds.filter(util.isString).length < 4)
+        );
     });
 
     // Listen for join-room
-    socket.on('join-room', function (msg) {
-        const playerId = msg.playerId;
-        const roomId = msg.roomId;
-        console.log('> join-room(' + playerId + ', ' + roomId + ') [' + socket.handshake.address + ']');
+    socket.on('join-room', function (roomId) {
+        console.log(roomId);
+        console.log('> join-room [' + socket.handshake.address + ']');
+
+        const playerId = socket.__playerId;
+        if (!playerId) { return; }
 
         // Check that game is not started
         const room = rooms[roomId];
-        if (room.started) socket.emit('join-room-ko');
+        if (!room) {
+            console.log("Warning: rejecting join-room from player '" + playerId + "' (room '" + roomId + "' is unknown).");
+            socket.emit('join-room-ko');
+            return;
+        }
+
+        if (room.started) {
+            console.log("Warning: rejecting join-room from player '" + playerId + "' (room '" + roomId + "' is started).");
+            socket.emit('join-room-ko');
+            return;
+        }
 
         // Pick a player number
         const playerNum = getNextPlayerNum(room);
+        if (playerNum === null) {
+            console.log("Warning: rejecting join-room from player '" + playerId + "' (could not get a number for player).");
+            socket.emit('join-room-ko');
+            return;
+        }
+
+        // Add player to room
         room.playerIds[playerNum - 1] = playerId;
         roomsByPlayerId[playerId] = room;
 
         // Send ok reply
-        console.log('< join-room-ok(' + playerNum + ', _) [' + socket.handshake.address + ']');
-        console.log(room);
         socket.emit('join-room-ok', {
             playerNum: playerNum,
             room: room
         });
 
         // Send  event room-changed
-        room.playerIds.filter(util.isString).map(getSocketForPlayer).forEach((sock) => {
-            console.log('<< room-changed(_S) [' + socket.handshake.address + ']');
-            sock.emit('room-changed', room);
-        });
+        room.playerIds.filter(util.isString).map(getSocketForPlayer).forEach(sock => sock.emit('room-changed', room));
     });
 
-    socket.on('start-game', function (msg) {
-        const playerId = msg.playerId;
-        const roomId = msg.roomId;
-        console.log('> start-game(' + playerId + ', ' + roomId + ') [' + socket.handshake.address + ']');
+    socket.on('start-game', function () {
+        console.log('> start-game [' + socket.handshake.address + ']');
 
-        const room = rooms[roomId];
+        const playerId = socket.__playerId;
+        if (!playerId) { return; }
+
+        const room = roomsByPlayerId[playerId];
+        if (room === null || room.started || room.ownerId !== playerId) {
+            console.log("Warning: rejecting start-room from player '" + playerId + "' (room unknown or started, or not owned by player).");
+            socket.emit('start-game-ko');
+            return;
+        }
         room.started = true;
 
         // Send event game-started
         room.playerIds.filter(util.isString).map(getSocketForPlayer).forEach((sock) => {
-            console.log('<< game-started [' + socket.handshake.address + ']');
             sock.emit('game-started');
         });
     });
 
     socket.on('spawn-entity', function (msg) {
-        const playerId = msg.playerId;
+        const playerId = socket.__playerId;
+        if (!playerId) { return; }
+
         const room = roomsByPlayerId[playerId];
+        if (!room) { return; }
+
         // Send event entity-spawned (excluding event sender)
         room.playerIds.filter(util.isString).filter((thatPlayerId) => thatPlayerId !== playerId).map(getSocketForPlayer).forEach((sock) => {
             sock.emit('entity-spawned', msg);
@@ -178,8 +220,12 @@ io.on('connection', function(socket) {
     });
 
     socket.on('sync-entity', function (msg) {
-        const playerId = msg.playerId;
+        const playerId = socket.__playerId;
+        if (!playerId) { return; }
+
         const room = roomsByPlayerId[playerId];
+        if (!room) { return; }
+
         // Send event entity-synced (excluding event sender)
         room.playerIds.filter(util.isString).filter((thatPlayerId) => thatPlayerId !== playerId).map(getSocketForPlayer).forEach((sock) => {
             sock.emit('entity-synced', msg);
@@ -187,8 +233,12 @@ io.on('connection', function(socket) {
     });
 
     socket.on('destroy-entity', function (msg) {
-        const playerId = msg.playerId;
+        const playerId = socket.__playerId;
+        if (!playerId) { return; }
+
         const room = roomsByPlayerId[playerId];
+        if (!room) { return; }
+
         // Send event entity-destroyed (excluding event sender)
         room.playerIds.filter(util.isString).filter((thatPlayerId) => thatPlayerId !== playerId).map(getSocketForPlayer).forEach((sock) => {
             sock.emit('entity-destroyed', msg);
