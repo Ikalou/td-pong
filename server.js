@@ -46,12 +46,9 @@ function getSocketForPlayer(playerId) {
     return socketsByPlayerId[playerId];
 }
 
-function cleanupForPlayerId(playerId) {
-    console.log('(!) cleanupForPlayerId: player "' + playerId + '"');
+function cleanupRoomForPlayerId(playerId) {
+    console.log('(!) cleanupRoomForPlayerId: player "' + playerId + '"');
 
-    if (socketsByPlayerId[playerId]) {
-        delete socketsByPlayerId[playerId];
-    }
     const room = roomsByPlayerId[playerId];
     if (room) {
         const playerNum = getPlayerNum(room, playerId);
@@ -71,6 +68,15 @@ function cleanupForPlayerId(playerId) {
     }
 }
 
+function cleanupEverythngForPlayerId(playerId) {
+    console.log('(!) cleanupEverythngForPlayerId: player "' + playerId + '"');
+
+    if (socketsByPlayerId[playerId]) {
+        delete socketsByPlayerId[playerId];
+    }
+    cleanupRoomForPlayerId(playerId);
+}
+
 /*
 Server logic
  */
@@ -84,7 +90,7 @@ io.on('connection', function(socket) {
         if (!socket.__playerId) { return; }
 
         // Cleanup any previous state for socket/player
-        cleanupForPlayerId(socket.__playerId);
+        cleanupEverythngForPlayerId(socket.__playerId);
     });
 
     // Listen for hello
@@ -92,7 +98,7 @@ io.on('connection', function(socket) {
         console.log('> hello [' + socket.handshake.address + ']');
 
         // Cleanup any previous state for socket/player
-        if (socket.__playerId) { cleanupForPlayerId(socket.__playerId); }
+        if (socket.__playerId) { cleanupEverythngForPlayerId(socket.__playerId); }
 
         // Get a new id for player
         const playerId = getUUID();
@@ -111,6 +117,9 @@ io.on('connection', function(socket) {
 
         const playerId = socket.__playerId;
         if (!playerId) { return; }
+
+        // Clean up any previous room
+        cleanupRoomForPlayerId(playerId);
 
         // Make a new room
         sweetName().then(roomId => {
