@@ -223,7 +223,7 @@ io.on('connection', function(socket) {
 
         // Send event entity-spawned (excluding event sender)
         room.playerIds.filter(util.isString).filter((thatPlayerId) => thatPlayerId !== playerId).map(getSocketForPlayer).forEach((sock) => {
-            sock.emit('entity-spawned', msg);
+            sock.emit('entity-spawned', {entityType: msg.entityType, entityId: msg.entityId, data: msg.data});
         });
     });
 
@@ -236,7 +236,7 @@ io.on('connection', function(socket) {
 
         // Send event entity-synced (excluding event sender)
         room.playerIds.filter(util.isString).filter((thatPlayerId) => thatPlayerId !== playerId).map(getSocketForPlayer).forEach((sock) => {
-            sock.emit('entity-synced', msg);
+            sock.emit('entity-synced', {entityId: msg.entityId, time: msg.time, data: msg.data});
         });
     });
 
@@ -249,7 +249,7 @@ io.on('connection', function(socket) {
 
         // Send event entity-destroyed (excluding event sender)
         room.playerIds.filter(util.isString).filter((thatPlayerId) => thatPlayerId !== playerId).map(getSocketForPlayer).forEach((sock) => {
-            sock.emit('entity-destroyed', msg);
+            sock.emit('entity-destroyed', {entityId: msg.entityId});
         });
     });
 });
